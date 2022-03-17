@@ -1,0 +1,20 @@
+{
+  "name": "app-protect-demo",
+  "description": "Trend Micro Application Protection Demo",
+  "version": "1.0.0",
+  "main": "app.js",
+  "maintainers": [
+    {
+      "name": "Raphael Bottino",
+      "email": "raphael_bottino@trendmicro.com",
+      "web": ""
+    }
+  ],
+  "dependencies": {
+    "express": "^4.17",
+    "request": "^2.88.0"
+  },
+  "scripts": {
+    "start": "node app.js"
+  }
+}

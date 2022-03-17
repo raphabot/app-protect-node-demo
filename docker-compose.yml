@@ -1,0 +1,12 @@
+version: '3'
+services:
+  application:
+    build: application/.
+    ports:
+      - "8080:80"
+    env_file:
+      application/env.list
+  attacker:
+    build: attacker/.
+    ports:
+      - "80:80"

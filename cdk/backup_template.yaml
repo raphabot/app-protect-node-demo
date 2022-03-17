@@ -1,0 +1,208 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: A simple lambda Web API
+
+Parameters:
+  ImmunioKey:
+    Type: String
+    Description: IMMUNIO_KEY value from Dashboard
+  ImmunioSecret:
+    Type: String
+    Description: IMMUNIO_SECRET value from Dashboard
+
+Resources:
+
+  MyVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+
+  MyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  MyInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref MyInternetGateway
+      VpcId: !Ref MyVpc
+
+  MyPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVpc
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: "10.0.0.0/24"
+      MapPublicIpOnLaunch: true
+
+  MyPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVpc
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: "10.0.1.0/24"
+      MapPublicIpOnLaunch: true
+
+  MyPublicRouteTable:
+        Type: AWS::EC2::RouteTable
+        Properties:
+            VpcId: !Ref MyVpc
+
+  MyDefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: MyInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref MyPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MyInternetGateway
+
+  MyPublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref MyPublicRouteTable
+      SubnetId: !Ref MyPublicSubnet1
+
+  MyPublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref MyPublicRouteTable
+      SubnetId: !Ref MyPublicSubnet2
+
+
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+
+  MyLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Simple Lambda API
+      Handler: index.handler
+      MemorySize: 2048
+      Runtime: python3.6
+      Timeout: 60
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Layers:
+        - arn:aws:lambda:us-east-1:321717822244:layer:DS-AppProtect-DEV-python3_6:11
+      Environment:
+        Variables:
+          IMMUNIO_KEY: !Ref ImmunioKey
+          IMMUNIO_SECRET: !Ref ImmunioSecret
+          IMMUNIO_READY_TIMEOUT: 10
+          IMMUNIO_TRANSACTION_FINISH_TIMEOUT: 10
+          IMMUNIO_INITIAL_DELAY_MS: 1
+          IMMUNIO_MAX_DELAY_MS: 100
+          IMMUNIO_MIN_REPORT_SIZE: 1
+          IMMUNIO_CACHE_DIR: /tmp/immunio_cache
+      Code:
+        ZipFile: |
+          import immunio.start
+          from immunio.api.aws_lambda import protect_handler
+          from immunio.exceptions import ImmunioOverrideResponse
+
+          @protect_handler
+          def handler(event, context):
+              qs = event.get("queryStringParameters", {})
+              fname = qs.get('file')
+              if fname is not None:
+                  try:
+                      with open(fname, "r") as f:
+                          f.read()
+                  except Exception:
+                      pass
+              return {
+                "statusCode": 200,
+                "statusDescription": "200 OK",
+                "isBase64Encoded": False,
+                "headers": {
+                    "Content-Type": "text/html; charset=utf-8",
+                },
+                "body": """<html>
+                    <head>
+                      <title>Hello World!</title>
+                      <style>
+                        html, body {
+                          margin: 0; padding: 0;
+                          font-family: arial; font-weight: 700; font-size: 3em;
+                          text-align: center;
+                        }
+                      </style>
+                    </head>
+                    <body>
+                      <p>Hello World from Lambda</p>
+                    </body>
+                  </html>
+                  """,
+              }
+
+  MyLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt MyLambdaFunction.Arn
+      Action: 'lambda:InvokeFunction'
+      Principal: elasticloadbalancing.amazonaws.com
+
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn: MyLambdaInvokePermission
+    Properties:
+      HealthCheckEnabled: false
+#      Name: MyTargets
+      TargetType: lambda
+      Targets:
+      - Id: !GetAtt MyLambdaFunction.Arn
+
+  MyLoadBalancerSG:
+    Type: "AWS::EC2::SecurityGroup"
+    DependsOn: MyVpc
+    Properties:
+      GroupDescription: "Load balancer security group"
+      VpcId: !Ref MyVpc
+      SecurityGroupIngress:
+        - IpProtocol: "tcp"
+          CidrIp: "0.0.0.0/0"
+          FromPort: 80
+          ToPort: 80
+        - IpProtocol: "tcp"
+          CidrIp: "0.0.0.0/0"
+          FromPort: 443
+          ToPort: 443
+
+  MyLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets:
+        - !Ref MyPublicSubnet1
+        - !Ref MyPublicSubnet2
+      SecurityGroups:
+        - !Ref MyLoadBalancerSG
+
+  MyLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+      - MyLoadBalancer
+      - MyTargetGroup
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref MyTargetGroup
+      LoadBalancerArn: !Ref MyLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+Outputs:
+  ApiUrl:
+    Description: API Endpoint for Lambda
+    Value: !GetAtt MyLoadBalancer.DNSName
